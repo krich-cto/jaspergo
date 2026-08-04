@@ -325,7 +325,24 @@ Examples:
 				fmt.Println("  Skipped (already exists).")
 				continue
 			}
-			if !yes && !ui.ConfirmOverwrite(reader, eds.URI) {
+			if auto {
+				changes, err := datasourceDiffers(c, eds)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "  WARNING: could not compare with server, will publish: %v\n", err)
+				} else if len(changes) == 0 {
+					fmt.Println("  Skipped (unchanged).")
+					continue
+				} else {
+					fmt.Println("  Changed fields:")
+					for _, change := range changes {
+						fmt.Printf("    • %s\n", change)
+					}
+					if !yes && !ui.ConfirmOverwrite(reader, "Publish these changes?") {
+						fmt.Println("  Skipped.")
+						continue
+					}
+				}
+			} else if !yes && !ui.ConfirmOverwrite(reader, eds.URI) {
 				fmt.Println("  Skipped.")
 				continue
 			}
@@ -406,12 +423,21 @@ Examples:
 				continue
 			}
 			if auto {
-				differs, err := reportDiffers(c, er, jrxmlPath, resources)
+				changes, err := reportDiffers(c, er, jrxmlPath, resources)
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "  WARNING: could not compare with server, will publish: %v\n", err)
-				} else if !differs {
+				} else if len(changes) == 0 {
 					fmt.Println("  Skipped (unchanged).")
 					continue
+				} else {
+					fmt.Println("  Changed:")
+					for _, change := range changes {
+						fmt.Printf("    • %s\n", change)
+					}
+					if !yes && !ui.ConfirmOverwrite(reader, "Publish these changes?") {
+						fmt.Println("  Skipped.")
+						continue
+					}
 				}
 			} else if !yes && !ui.ConfirmOverwrite(reader, er.URI) {
 				fmt.Println("  Skipped.")
@@ -1034,14 +1060,18 @@ func buildExistenceMap(c *client.JasperClient, manifest models.ExportManifest) m
 	return existing
 }
 
-func reportDiffers(c *client.JasperClient, er models.ExportReport, jrxmlPath string, resources []models.ResourceFile) (bool, error) {
+func reportDiffers(c *client.JasperClient, er models.ExportReport, jrxmlPath string, resources []models.ResourceFile) ([]string, error) {
+	var changes []string
 	detail, err := c.GetReportUnit(er.URI)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 
-	if detail.Label != er.Label || detail.Description != er.Description {
-		return true, nil
+	if detail.Label != er.Label {
+		changes = append(changes, fmt.Sprintf("label: %q → %q", detail.Label, er.Label))
+	}
+	if detail.Description != er.Description {
+		changes = append(changes, fmt.Sprintf("description: %q → %q", detail.Description, er.Description))
 	}
 
 	localDS := er.Datasource
@@ -1050,22 +1080,23 @@ func reportDiffers(c *client.JasperClient, er models.ExportReport, jrxmlPath str
 		serverDS = detail.DataSource.DataSourceReference.URI
 	}
 	if serverDS != localDS {
-		return true, nil
+		changes = append(changes, fmt.Sprintf("datasource: %q → %q", serverDS, localDS))
 	}
 
 	localJRXML, err := os.ReadFile(jrxmlPath)
 	if err != nil {
-		return false, fmt.Errorf("reading jrxml: %w", err)
+		return nil, fmt.Errorf("reading jrxml: %w", err)
 	}
 	if detail.JRXML == nil || detail.JRXML.JRXMLFile == nil || detail.JRXML.JRXMLFile.Content == "" {
-		return true, nil
-	}
-	serverJRXML, err := base64.StdEncoding.DecodeString(detail.JRXML.JRXMLFile.Content)
-	if err != nil {
-		return false, fmt.Errorf("decoding server jrxml: %w", err)
-	}
-	if !bytes.Equal(localJRXML, serverJRXML) {
-		return true, nil
+		changes = append(changes, "JRXML content: server has no content")
+	} else {
+		serverJRXML, err := base64.StdEncoding.DecodeString(detail.JRXML.JRXMLFile.Content)
+		if err != nil {
+			return nil, fmt.Errorf("decoding server jrxml: %w", err)
+		}
+		if !bytes.Equal(localJRXML, serverJRXML) {
+			changes = append(changes, "JRXML content differs")
+		}
 	}
 
 	serverResMap := make(map[string]string)
@@ -1077,24 +1108,58 @@ func reportDiffers(c *client.JasperClient, er models.ExportReport, jrxmlPath str
 		}
 	}
 	if len(resources) != len(serverResMap) {
-		return true, nil
-	}
-	for _, r := range resources {
-		serverContent, ok := serverResMap[r.Name]
-		if !ok {
-			return true, nil
-		}
-		if r.URI != "" {
-			continue
-		}
-		localData, err := os.ReadFile(r.FilePath)
-		if err != nil {
-			return false, fmt.Errorf("reading resource %s: %w", r.Name, err)
-		}
-		if serverContent != base64.StdEncoding.EncodeToString(localData) {
-			return true, nil
+		changes = append(changes, fmt.Sprintf("resource count: %d → %d", len(serverResMap), len(resources)))
+	} else {
+		for _, r := range resources {
+			serverContent, ok := serverResMap[r.Name]
+			if !ok {
+				changes = append(changes, fmt.Sprintf("resource added: %s", r.Name))
+				continue
+			}
+			if r.URI != "" {
+				continue
+			}
+			localData, err := os.ReadFile(r.FilePath)
+			if err != nil {
+				return nil, fmt.Errorf("reading resource %s: %w", r.Name, err)
+			}
+			if serverContent != base64.StdEncoding.EncodeToString(localData) {
+				changes = append(changes, fmt.Sprintf("resource modified: %s", r.Name))
+			}
 		}
 	}
 
-	return false, nil
+	return changes, nil
+}
+
+func datasourceDiffers(c *client.JasperClient, eds models.ExportDatasource) ([]string, error) {
+	var changes []string
+	detail, err := c.GetDatasource(eds.URI)
+	if err != nil {
+		return nil, err
+	}
+
+	if detail.Label != eds.Label {
+		changes = append(changes, fmt.Sprintf("label: %q → %q", detail.Label, eds.Label))
+	}
+	if detail.Description != eds.Description {
+		changes = append(changes, fmt.Sprintf("description: %q → %q", detail.Description, eds.Description))
+	}
+	if detail.DriverClass != eds.DriverClass {
+		changes = append(changes, fmt.Sprintf("driver: %q → %q", detail.DriverClass, eds.DriverClass))
+	}
+	if detail.ConnectionURL != eds.ConnectionURL {
+		changes = append(changes, fmt.Sprintf("connection URL changed"))
+	}
+	if detail.Username != eds.Username {
+		changes = append(changes, fmt.Sprintf("username: %q → %q", detail.Username, eds.Username))
+	}
+	if detail.Password != eds.Password {
+		changes = append(changes, fmt.Sprintf("password changed"))
+	}
+	if detail.Timezone != eds.Timezone {
+		changes = append(changes, fmt.Sprintf("timezone: %q → %q", detail.Timezone, eds.Timezone))
+	}
+
+	return changes, nil
 }
