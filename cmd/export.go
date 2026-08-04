@@ -333,9 +333,9 @@ Examples:
 					fmt.Println("  Skipped (unchanged).")
 					continue
 				} else {
-					fmt.Println("  Changed fields:")
+					fmt.Println("  Changes detected:")
 					for _, change := range changes {
-						fmt.Printf("    • %s\n", change)
+						fmt.Printf("    %s\n", change)
 					}
 					if !yes && !ui.ConfirmOverwrite(reader, "Publish these changes?") {
 						fmt.Println("  Skipped.")
@@ -430,9 +430,9 @@ Examples:
 					fmt.Println("  Skipped (unchanged).")
 					continue
 				} else {
-					fmt.Println("  Changed:")
+					fmt.Println("  Changes detected:")
 					for _, change := range changes {
-						fmt.Printf("    • %s\n", change)
+						fmt.Printf("    %s\n", change)
 					}
 					if !yes && !ui.ConfirmOverwrite(reader, "Publish these changes?") {
 						fmt.Println("  Skipped.")
@@ -1068,10 +1068,16 @@ func reportDiffers(c *client.JasperClient, er models.ExportReport, jrxmlPath str
 	}
 
 	if detail.Label != er.Label {
-		changes = append(changes, fmt.Sprintf("label: %q → %q", detail.Label, er.Label))
+		changes = append(changes, fmt.Sprintf("[LABEL] %q → %q", detail.Label, er.Label))
 	}
 	if detail.Description != er.Description {
-		changes = append(changes, fmt.Sprintf("description: %q → %q", detail.Description, er.Description))
+		if detail.Description == "" && er.Description != "" {
+			changes = append(changes, fmt.Sprintf("[DESCRIPTION] (empty) → %q", er.Description))
+		} else if detail.Description != "" && er.Description == "" {
+			changes = append(changes, fmt.Sprintf("[DESCRIPTION] %q → (empty)", detail.Description))
+		} else {
+			changes = append(changes, fmt.Sprintf("[DESCRIPTION] %q → %q", detail.Description, er.Description))
+		}
 	}
 
 	localDS := er.Datasource
@@ -1080,7 +1086,13 @@ func reportDiffers(c *client.JasperClient, er models.ExportReport, jrxmlPath str
 		serverDS = detail.DataSource.DataSourceReference.URI
 	}
 	if serverDS != localDS {
-		changes = append(changes, fmt.Sprintf("datasource: %q → %q", serverDS, localDS))
+		if serverDS == "" && localDS != "" {
+			changes = append(changes, fmt.Sprintf("[DATASOURCE] (none) → %q", localDS))
+		} else if serverDS != "" && localDS == "" {
+			changes = append(changes, fmt.Sprintf("[DATASOURCE] %q → (none)", serverDS))
+		} else {
+			changes = append(changes, fmt.Sprintf("[DATASOURCE] %q → %q", serverDS, localDS))
+		}
 	}
 
 	localJRXML, err := os.ReadFile(jrxmlPath)
@@ -1088,45 +1100,81 @@ func reportDiffers(c *client.JasperClient, er models.ExportReport, jrxmlPath str
 		return nil, fmt.Errorf("reading jrxml: %w", err)
 	}
 	if detail.JRXML == nil || detail.JRXML.JRXMLFile == nil || detail.JRXML.JRXMLFile.Content == "" {
-		changes = append(changes, "JRXML content: server has no content")
+		changes = append(changes, fmt.Sprintf("[JRXML] Server has no content, local: %d bytes", len(localJRXML)))
 	} else {
 		serverJRXML, err := base64.StdEncoding.DecodeString(detail.JRXML.JRXMLFile.Content)
 		if err != nil {
 			return nil, fmt.Errorf("decoding server jrxml: %w", err)
 		}
 		if !bytes.Equal(localJRXML, serverJRXML) {
-			changes = append(changes, "JRXML content differs")
+			changes = append(changes, fmt.Sprintf("[JRXML] Size: %d → %d bytes", len(serverJRXML), len(localJRXML)))
 		}
 	}
 
 	serverResMap := make(map[string]string)
+	serverResDetails := make(map[string]int64)
 	if detail.Resources != nil {
 		for _, res := range detail.Resources.Resource {
 			if res.File.FileResource != nil {
 				serverResMap[res.Name] = res.File.FileResource.Content
+				decoded, err := base64.StdEncoding.DecodeString(res.File.FileResource.Content)
+				if err == nil {
+					serverResDetails[res.Name] = int64(len(decoded))
+				}
 			}
 		}
 	}
-	if len(resources) != len(serverResMap) {
-		changes = append(changes, fmt.Sprintf("resource count: %d → %d", len(serverResMap), len(resources)))
-	} else {
+
+	var added, modified, removed []string
+	for _, r := range resources {
+		serverContent, ok := serverResMap[r.Name]
+		if !ok {
+			if r.FilePath != "" {
+				data, err := os.ReadFile(r.FilePath)
+				if err == nil {
+					added = append(added, fmt.Sprintf("%s (%d bytes)", r.Name, len(data)))
+				} else {
+					added = append(added, r.Name)
+				}
+			} else {
+				added = append(added, fmt.Sprintf("%s (reference)", r.Name))
+			}
+			continue
+		}
+		if r.URI != "" {
+			continue
+		}
+		localData, err := os.ReadFile(r.FilePath)
+		if err != nil {
+			return nil, fmt.Errorf("reading resource %s: %w", r.Name, err)
+		}
+		if serverContent != base64.StdEncoding.EncodeToString(localData) {
+			serverSize := serverResDetails[r.Name]
+			modified = append(modified, fmt.Sprintf("%s: %d → %d bytes", r.Name, serverSize, len(localData)))
+		}
+	}
+
+	for name := range serverResMap {
+		found := false
 		for _, r := range resources {
-			serverContent, ok := serverResMap[r.Name]
-			if !ok {
-				changes = append(changes, fmt.Sprintf("resource added: %s", r.Name))
-				continue
-			}
-			if r.URI != "" {
-				continue
-			}
-			localData, err := os.ReadFile(r.FilePath)
-			if err != nil {
-				return nil, fmt.Errorf("reading resource %s: %w", r.Name, err)
-			}
-			if serverContent != base64.StdEncoding.EncodeToString(localData) {
-				changes = append(changes, fmt.Sprintf("resource modified: %s", r.Name))
+			if r.Name == name {
+				found = true
+				break
 			}
 		}
+		if !found {
+			removed = append(removed, fmt.Sprintf("%s (%d bytes)", name, serverResDetails[name]))
+		}
+	}
+
+	if len(added) > 0 {
+		changes = append(changes, fmt.Sprintf("[RESOURCES] Added (%d): %s", len(added), strings.Join(added, ", ")))
+	}
+	if len(modified) > 0 {
+		changes = append(changes, fmt.Sprintf("[RESOURCES] Modified (%d): %s", len(modified), strings.Join(modified, "; ")))
+	}
+	if len(removed) > 0 {
+		changes = append(changes, fmt.Sprintf("[RESOURCES] Removed (%d): %s", len(removed), strings.Join(removed, ", ")))
 	}
 
 	return changes, nil
@@ -1140,25 +1188,55 @@ func datasourceDiffers(c *client.JasperClient, eds models.ExportDatasource) ([]s
 	}
 
 	if detail.Label != eds.Label {
-		changes = append(changes, fmt.Sprintf("label: %q → %q", detail.Label, eds.Label))
+		changes = append(changes, fmt.Sprintf("[LABEL] %q → %q", detail.Label, eds.Label))
 	}
+
 	if detail.Description != eds.Description {
-		changes = append(changes, fmt.Sprintf("description: %q → %q", detail.Description, eds.Description))
+		if detail.Description == "" && eds.Description != "" {
+			changes = append(changes, fmt.Sprintf("[DESCRIPTION] (empty) → %q", eds.Description))
+		} else if detail.Description != "" && eds.Description == "" {
+			changes = append(changes, fmt.Sprintf("[DESCRIPTION] %q → (empty)", detail.Description))
+		} else {
+			changes = append(changes, fmt.Sprintf("[DESCRIPTION] %q → %q", detail.Description, eds.Description))
+		}
 	}
+
 	if detail.DriverClass != eds.DriverClass {
-		changes = append(changes, fmt.Sprintf("driver: %q → %q", detail.DriverClass, eds.DriverClass))
+		changes = append(changes, fmt.Sprintf("[DRIVER] %q → %q", detail.DriverClass, eds.DriverClass))
 	}
+
 	if detail.ConnectionURL != eds.ConnectionURL {
-		changes = append(changes, fmt.Sprintf("connection URL changed"))
+		changes = append(changes, fmt.Sprintf("[CONNECTION_URL] %q → %q", detail.ConnectionURL, eds.ConnectionURL))
 	}
+
 	if detail.Username != eds.Username {
-		changes = append(changes, fmt.Sprintf("username: %q → %q", detail.Username, eds.Username))
+		if detail.Username == "" && eds.Username != "" {
+			changes = append(changes, fmt.Sprintf("[USERNAME] (empty) → %q", eds.Username))
+		} else if detail.Username != "" && eds.Username == "" {
+			changes = append(changes, fmt.Sprintf("[USERNAME] %q → (empty)", detail.Username))
+		} else {
+			changes = append(changes, fmt.Sprintf("[USERNAME] %q → %q", detail.Username, eds.Username))
+		}
 	}
+
 	if detail.Password != eds.Password {
-		changes = append(changes, fmt.Sprintf("password changed"))
+		if detail.Password == "" && eds.Password != "" {
+			changes = append(changes, "[PASSWORD] (empty) → (set)")
+		} else if detail.Password != "" && eds.Password == "" {
+			changes = append(changes, "[PASSWORD] (set) → (empty)")
+		} else {
+			changes = append(changes, "[PASSWORD] (changed)")
+		}
 	}
+
 	if detail.Timezone != eds.Timezone {
-		changes = append(changes, fmt.Sprintf("timezone: %q → %q", detail.Timezone, eds.Timezone))
+		if detail.Timezone == "" && eds.Timezone != "" {
+			changes = append(changes, fmt.Sprintf("[TIMEZONE] (empty) → %q", eds.Timezone))
+		} else if detail.Timezone != "" && eds.Timezone == "" {
+			changes = append(changes, fmt.Sprintf("[TIMEZONE] %q → (empty)", detail.Timezone))
+		} else {
+			changes = append(changes, fmt.Sprintf("[TIMEZONE] %q → %q", detail.Timezone, eds.Timezone))
+		}
 	}
 
 	return changes, nil
