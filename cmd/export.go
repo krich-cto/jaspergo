@@ -329,18 +329,17 @@ Examples:
 				changes, err := datasourceDiffers(c, eds)
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "  WARNING: could not compare with server, will publish: %v\n", err)
-				} else if len(changes) == 0 {
-					fmt.Println("  Skipped (unchanged).")
-					continue
-				} else {
+				} else if len(changes) > 0 {
 					fmt.Println("  Changes detected:")
 					for _, change := range changes {
 						fmt.Printf("    %s\n", change)
 					}
-					if !yes && !ui.ConfirmOverwrite(reader, "Publish these changes?") {
-						fmt.Println("  Skipped.")
-						continue
-					}
+				} else {
+					fmt.Println("  No field changes detected (password may have changed):")
+				}
+				if !yes && !ui.ConfirmOverwrite(reader, "Publish datasource?") {
+					fmt.Println("  Skipped.")
+					continue
 				}
 			} else if !yes && !ui.ConfirmOverwrite(reader, eds.URI) {
 				fmt.Println("  Skipped.")
