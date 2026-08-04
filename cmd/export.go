@@ -1219,16 +1219,6 @@ func datasourceDiffers(c *client.JasperClient, eds models.ExportDatasource) ([]s
 		}
 	}
 
-	if detail.Password != eds.Password {
-		if detail.Password == "" && eds.Password != "" {
-			changes = append(changes, "[PASSWORD] (empty) → (set)")
-		} else if detail.Password != "" && eds.Password == "" {
-			changes = append(changes, "[PASSWORD] (set) → (empty)")
-		} else {
-			changes = append(changes, "[PASSWORD] (changed)")
-		}
-	}
-
 	if detail.Timezone != eds.Timezone {
 		if detail.Timezone == "" && eds.Timezone != "" {
 			changes = append(changes, fmt.Sprintf("[TIMEZONE] (empty) → %q", eds.Timezone))
