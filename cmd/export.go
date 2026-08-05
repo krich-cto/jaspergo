@@ -1040,33 +1040,45 @@ func resolveImportPath(manifestPath, relPath string) string {
 }
 
 func listAllServerResources(c *client.JasperClient, manifest models.ExportManifest) ([]models.ServerResource, map[string]bool) {
-	folderSet := make(map[string]bool)
-	add := func(uri string) {
-		if idx := strings.LastIndex(uri, "/"); idx > 0 {
-			folderSet[uri[:idx]] = true
-		} else {
-			folderSet["/"] = true
-		}
-	}
-	for _, ds := range manifest.Datasources {
-		add(ds.URI)
-	}
-	for _, r := range manifest.Reports {
-		add(r.URI)
-	}
-
+	// List all resources from root recursively to capture everything on the server
 	var allResources []models.ServerResource
 	existing := make(map[string]bool)
-	for folder := range folderSet {
-		resources, err := c.ListResources(folder, true, "")
-		if err != nil {
-			continue
+
+	resources, err := c.ListResources("/", true, "")
+	if err != nil {
+		// Fallback: list only from manifest folders if root listing fails
+		folderSet := make(map[string]bool)
+		add := func(uri string) {
+			if idx := strings.LastIndex(uri, "/"); idx > 0 {
+				folderSet[uri[:idx]] = true
+			} else {
+				folderSet["/"] = true
+			}
 		}
+		for _, ds := range manifest.Datasources {
+			add(ds.URI)
+		}
+		for _, r := range manifest.Reports {
+			add(r.URI)
+		}
+
+		for folder := range folderSet {
+			res, err := c.ListResources(folder, true, "")
+			if err != nil {
+				continue
+			}
+			for _, r := range res {
+				allResources = append(allResources, r)
+				existing[r.URI] = true
+			}
+		}
+	} else {
 		for _, r := range resources {
 			allResources = append(allResources, r)
 			existing[r.URI] = true
 		}
 	}
+
 	return allResources, existing
 }
 
