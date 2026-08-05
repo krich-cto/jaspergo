@@ -308,8 +308,22 @@ Examples:
 	}
 	fmt.Println("Connected.")
 
-	fmt.Println("Checking existing resources on server…")
-	serverExists := buildExistenceMap(c, manifest)
+	fmt.Println("Listing all existing resources on server…")
+	allServerResources, serverExists := listAllServerResources(c, manifest)
+
+	if len(allServerResources) > 0 {
+		fmt.Printf("\nFound %d existing resource(s) on server:\n", len(allServerResources))
+		byType := make(map[string][]string)
+		for _, res := range allServerResources {
+			byType[res.ResourceType] = append(byType[res.ResourceType], res.URI)
+		}
+		for resType, uris := range byType {
+			fmt.Printf("  [%s] (%d):\n", resType, len(uris))
+			for _, uri := range uris {
+				fmt.Printf("    • %s\n", uri)
+			}
+		}
+	}
 
 	ok, failed := 0, 0
 
@@ -325,23 +339,18 @@ Examples:
 				fmt.Println("  Skipped (already exists).")
 				continue
 			}
-			if auto {
-				changes, err := datasourceDiffers(c, eds)
-				if err != nil {
-					fmt.Fprintf(os.Stderr, "  WARNING: could not compare with server, will publish: %v\n", err)
-				} else if len(changes) > 0 {
-					fmt.Println("  Changes detected:")
-					for _, change := range changes {
-						fmt.Printf("    %s\n", change)
-					}
-				} else {
-					fmt.Println("  No field changes detected (password may have changed):")
+			changes, err := datasourceDiffers(c, eds)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "  WARNING: could not compare with server: %v\n", err)
+			} else if len(changes) > 0 {
+				fmt.Println("  Changes detected:")
+				for _, change := range changes {
+					fmt.Printf("    %s\n", change)
 				}
-				if !yes && !ui.ConfirmOverwrite(reader, "Publish datasource?") {
-					fmt.Println("  Skipped.")
-					continue
-				}
-			} else if !yes && !ui.ConfirmOverwrite(reader, eds.URI) {
+			} else {
+				fmt.Println("  No field changes detected (password may have changed).")
+			}
+			if !yes && !ui.ConfirmOverwrite(reader, "Overwrite this datasource?") {
 				fmt.Println("  Skipped.")
 				continue
 			}
@@ -421,24 +430,24 @@ Examples:
 				fmt.Println("  Skipped (already exists).")
 				continue
 			}
-			if auto {
-				changes, err := reportDiffers(c, er, jrxmlPath, resources)
-				if err != nil {
-					fmt.Fprintf(os.Stderr, "  WARNING: could not compare with server, will publish: %v\n", err)
-				} else if len(changes) == 0 {
-					fmt.Println("  Skipped (unchanged).")
-					continue
-				} else {
-					fmt.Println("  Changes detected:")
-					for _, change := range changes {
-						fmt.Printf("    %s\n", change)
-					}
-					if !yes && !ui.ConfirmOverwrite(reader, "Publish these changes?") {
-						fmt.Println("  Skipped.")
-						continue
-					}
+			changes, err := reportDiffers(c, er, jrxmlPath, resources)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "  WARNING: could not compare with server: %v\n", err)
+			} else if len(changes) > 0 {
+				fmt.Println("  Changes detected:")
+				for _, change := range changes {
+					fmt.Printf("    %s\n", change)
 				}
-			} else if !yes && !ui.ConfirmOverwrite(reader, er.URI) {
+			} else if !auto {
+				fmt.Println("  Already exists on server.")
+			} else {
+				fmt.Println("  No changes detected.")
+			}
+			if auto && len(changes) == 0 {
+				fmt.Println("  Skipped (unchanged).")
+				continue
+			}
+			if !yes && !ui.ConfirmOverwrite(reader, "Overwrite this report?") {
 				fmt.Println("  Skipped.")
 				continue
 			}
@@ -1030,7 +1039,7 @@ func resolveImportPath(manifestPath, relPath string) string {
 	return filepath.Join(filepath.Dir(manifestPath), relPath)
 }
 
-func buildExistenceMap(c *client.JasperClient, manifest models.ExportManifest) map[string]bool {
+func listAllServerResources(c *client.JasperClient, manifest models.ExportManifest) ([]models.ServerResource, map[string]bool) {
 	folderSet := make(map[string]bool)
 	add := func(uri string) {
 		if idx := strings.LastIndex(uri, "/"); idx > 0 {
@@ -1046,6 +1055,7 @@ func buildExistenceMap(c *client.JasperClient, manifest models.ExportManifest) m
 		add(r.URI)
 	}
 
+	var allResources []models.ServerResource
 	existing := make(map[string]bool)
 	for folder := range folderSet {
 		resources, err := c.ListResources(folder, true, "")
@@ -1053,9 +1063,15 @@ func buildExistenceMap(c *client.JasperClient, manifest models.ExportManifest) m
 			continue
 		}
 		for _, r := range resources {
+			allResources = append(allResources, r)
 			existing[r.URI] = true
 		}
 	}
+	return allResources, existing
+}
+
+func buildExistenceMap(c *client.JasperClient, manifest models.ExportManifest) map[string]bool {
+	_, existing := listAllServerResources(c, manifest)
 	return existing
 }
 
