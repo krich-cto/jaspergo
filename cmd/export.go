@@ -10,6 +10,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -317,7 +318,16 @@ Examples:
 		for _, res := range allServerResources {
 			byType[res.ResourceType] = append(byType[res.ResourceType], res.URI)
 		}
-		for resType, uris := range byType {
+		// Sort types alphabetically
+		var types []string
+		for t := range byType {
+			types = append(types, t)
+		}
+		sort.Strings(types)
+		for _, resType := range types {
+			uris := byType[resType]
+			// Sort URIs within each type
+			sort.Strings(uris)
 			fmt.Printf("  [%s] (%d):\n", resType, len(uris))
 			for _, uri := range uris {
 				fmt.Printf("    • %s\n", uri)
