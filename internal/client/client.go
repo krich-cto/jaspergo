@@ -251,25 +251,42 @@ func (c *JasperClient) UploadSharedFile(serverURI, resourceType, filePath string
 		return fmt.Errorf("reading file: %w", err)
 	}
 
+	// Check if resource exists and get its version for optimistic locking
+	var version int64
+	resp, err := c.do(http.MethodGet, repoAPI+serverURI, "application/repository.file+json", nil, "")
+	if err == nil && resp.StatusCode == http.StatusOK {
+		defer drainClose(resp)
+		var existing struct {
+			Version int64 `json:"version"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&existing); err == nil {
+			version = existing.Version
+		}
+	} else if resp != nil {
+		defer drainClose(resp)
+	}
+
 	descriptor := struct {
 		URI          string `json:"uri"`
 		Label        string `json:"label"`
 		ResourceType string `json:"resourceType"`
 		Type         string `json:"type"`
 		Content      string `json:"content"`
+		Version      int64  `json:"version,omitempty"`
 	}{
 		URI:          serverURI,
 		Label:        filepath.Base(serverURI),
 		ResourceType: "file",
 		Type:         resourceType,
 		Content:      base64.StdEncoding.EncodeToString(data),
+		Version:      version,
 	}
 	body, err := json.Marshal(descriptor)
 	if err != nil {
 		return fmt.Errorf("marshaling file descriptor: %w", err)
 	}
 
-	resp, err := c.do(
+	resp, err = c.do(
 		http.MethodPut,
 		repoAPI+serverURI+"?createFolders=true",
 		"application/repository.file+json",
