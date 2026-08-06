@@ -349,22 +349,21 @@ Examples:
 					fmt.Println("  Skipped (already exists).")
 					continue
 				}
-				// Get current version for optimistic locking
-				if err := c.UploadSharedFile(sr.URI, sr.Type, sr.FilePath); err != nil {
-					fmt.Fprintf(os.Stderr, "  ERROR: %v\n", err)
-					failed++
-				} else {
-					fmt.Printf("  Uploaded OK (updated).\n")
-					ok++
+				if !yes && !ui.ConfirmOverwrite(reader, "Overwrite this shared resource?") {
+					fmt.Println("  Skipped.")
+					continue
 				}
+			}
+			if err := c.UploadSharedFile(sr.URI, sr.Type, sr.FilePath); err != nil {
+				fmt.Fprintf(os.Stderr, "  ERROR: %v\n", err)
+				failed++
 			} else {
-				if err := c.UploadSharedFile(sr.URI, sr.Type, sr.FilePath); err != nil {
-					fmt.Fprintf(os.Stderr, "  ERROR: %v\n", err)
-					failed++
-				} else {
-					fmt.Printf("  Uploaded OK (created).\n")
-					ok++
+				action := "created"
+				if exists {
+					action = "updated"
 				}
+				fmt.Printf("  Uploaded OK (%s).\n", action)
+				ok++
 			}
 		}
 	}
