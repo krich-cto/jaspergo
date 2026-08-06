@@ -337,6 +337,38 @@ Examples:
 
 	ok, failed := 0, 0
 
+	// Extract all unique shared resources from all reports
+	sharedResources := extractSharedResources(manifest, input)
+	if len(sharedResources) > 0 {
+		fmt.Printf("\nProcessing %d shared resource(s)…\n", len(sharedResources))
+		for i, sr := range sharedResources {
+			fmt.Printf("\n[%d/%d] Shared resource %s → %s\n", i+1, len(sharedResources), sr.Name, sr.URI)
+			exists := serverExists[sr.URI]
+			if exists {
+				if no {
+					fmt.Println("  Skipped (already exists).")
+					continue
+				}
+				// Get current version for optimistic locking
+				if err := c.UploadSharedFile(sr.URI, sr.Type, sr.FilePath); err != nil {
+					fmt.Fprintf(os.Stderr, "  ERROR: %v\n", err)
+					failed++
+				} else {
+					fmt.Printf("  Uploaded OK (updated).\n")
+					ok++
+				}
+			} else {
+				if err := c.UploadSharedFile(sr.URI, sr.Type, sr.FilePath); err != nil {
+					fmt.Fprintf(os.Stderr, "  ERROR: %v\n", err)
+					failed++
+				} else {
+					fmt.Printf("  Uploaded OK (created).\n")
+					ok++
+				}
+			}
+		}
+	}
+
 	if len(manifest.Datasources) > 0 {
 		fmt.Printf("\nImporting %d datasource(s)…\n", len(manifest.Datasources))
 	}
@@ -390,7 +422,9 @@ Examples:
 		}
 	}
 
-	uploadedShared := make(map[string]bool)
+	if len(manifest.Reports) > 0 {
+		fmt.Printf("\nImporting %d report(s)…\n", len(manifest.Reports))
+	}
 	for i, er := range manifest.Reports {
 		if isThemePath(er.URI) {
 			fmt.Printf("  [%d/%d] Skipping theme path: %s\n", i+1, len(manifest.Reports), er.URI)
@@ -480,19 +514,7 @@ Examples:
 					rnames[j] = r.Name
 				}
 			}
-			fmt.Printf("  Resources:\n    %s\n", strings.Join(rnames, "\n    "))
-		}
-
-		for _, r := range resources {
-			if !r.Shared || uploadedShared[r.URI] {
-				continue
-			}
-			fmt.Printf("  Uploading shared resource %s → %s\n", r.Name, r.URI)
-			if err := c.UploadSharedFile(r.URI, r.Type, r.FilePath); err != nil {
-				fmt.Fprintf(os.Stderr, "  WARNING: could not upload shared resource %s: %v\n", r.Name, err)
-			} else {
-				uploadedShared[r.URI] = true
-			}
+			fmt.Printf("  Resources: %s\n", strings.Join(rnames, ", "))
 		}
 
 		if err := c.PublishReport(er.URI, reportName, er.Description, er.Datasource, jrxmlPath, resources); err != nil {
@@ -1267,4 +1289,45 @@ func datasourceDiffers(c *client.JasperClient, eds models.ExportDatasource) ([]s
 	}
 
 	return changes, nil
+}
+
+// sharedResourceInfo holds details about a shared resource
+type sharedResourceInfo struct {
+	Name     string
+	URI      string
+	Type     string
+	FilePath string
+}
+
+func extractSharedResources(manifest models.ExportManifest, manifestPath string) []sharedResourceInfo {
+	seen := make(map[string]bool)
+	var resources []sharedResourceInfo
+
+	for _, er := range manifest.Reports {
+		for _, res := range er.Resources {
+			if !res.Shared || res.URI == "" || seen[res.URI] {
+				continue
+			}
+			seen[res.URI] = true
+
+			filePath := res.File
+			if filePath != "" {
+				filePath = resolveImportPath(manifestPath, res.File)
+			}
+
+			resources = append(resources, sharedResourceInfo{
+				Name:     res.Name,
+				URI:      res.URI,
+				Type:     res.Type,
+				FilePath: filePath,
+			})
+		}
+	}
+
+	// Sort by URI for consistent ordering
+	sort.Slice(resources, func(i, j int) bool {
+		return resources[i].URI < resources[j].URI
+	})
+
+	return resources
 }
