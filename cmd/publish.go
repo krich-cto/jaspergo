@@ -296,7 +296,7 @@ Examples:
 					names[i] = filepath.Base(r.FilePath)
 				}
 			}
-			fmt.Printf("  Resources: %s\n", strings.Join(names, ", "))
+			fmt.Printf("  Resources:\n    %s\n", strings.Join(names, "\n    "))
 		}
 
 		if err := c.PublishReport(serverPath, reportName, job.description, job.datasourceURI, job.file, resources); err != nil {

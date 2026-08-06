@@ -271,16 +271,17 @@ func (c *JasperClient) UploadSharedFile(serverURI, resourceType, filePath string
 		Label        string `json:"label"`
 		ResourceType string `json:"resourceType"`
 		Type         string `json:"type"`
+		Version      int64  `json:"version"`
 		Content      string `json:"content"`
-		Version      int64  `json:"version,omitempty"`
 	}{
 		URI:          serverURI,
 		Label:        filepath.Base(serverURI),
 		ResourceType: "file",
 		Type:         resourceType,
-		Content:      base64.StdEncoding.EncodeToString(data),
 		Version:      version,
+		Content:      base64.StdEncoding.EncodeToString(data),
 	}
+
 	body, err := json.Marshal(descriptor)
 	if err != nil {
 		return fmt.Errorf("marshaling file descriptor: %w", err)

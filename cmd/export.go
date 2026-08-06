@@ -480,7 +480,7 @@ Examples:
 					rnames[j] = r.Name
 				}
 			}
-			fmt.Printf("  Resources: %s\n", strings.Join(rnames, ", "))
+			fmt.Printf("  Resources:\n    %s\n", strings.Join(rnames, "\n    "))
 		}
 
 		for _, r := range resources {
@@ -1020,9 +1020,9 @@ func typeToExt(t string) string {
 
 var knownExportExts = map[string]bool{
 	".jrxml": true, ".jasper": true,
-	".jrtx":       true,
-	".png":        true, ".jpg": true, ".jpeg": true, ".gif": true, ".svg": true, ".bmp": true,
-	".ttf":        true, ".otf": true,
+	".jrtx": true,
+	".png":  true, ".jpg": true, ".jpeg": true, ".gif": true, ".svg": true, ".bmp": true,
+	".ttf": true, ".otf": true,
 	".jar":        true,
 	".properties": true,
 }
