@@ -1199,9 +1199,7 @@ func reportDiffers(c *client.JasperClient, er models.ExportReport, jrxmlPath str
 			}
 			continue
 		}
-		if r.URI != "" {
-			continue
-		}
+		// Compare both embedded and shared resources
 		localData, err := os.ReadFile(r.FilePath)
 		if err != nil {
 			return nil, fmt.Errorf("reading resource %s: %w", r.Name, err)
